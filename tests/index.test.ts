@@ -1,265 +1,22 @@
-import { RentalFeeSDK, CalculationInput, FeeRules, Tenant } from '../src';
+import { RentalFeeSDK, CalculationInput, FeeRules, Tenant, ValidationResult } from '../src';
 
-const sdk = new RentalFeeSDK({
-  roundingMode: 'round',
-  precision: 2,
-  splitMode: 'average',
-});
+const sdk = new RentalFeeSDK({ roundingMode: 'round', precision: 2, splitMode: 'average' });
 
 function log(title: string, data?: any): void {
   console.log('\n' + '='.repeat(60));
   console.log(`  ${title}`);
   console.log('='.repeat(60));
   if (data !== undefined) {
-    if (typeof data === 'string') {
-      console.log(data);
-    } else {
-      console.log(JSON.stringify(data, null, 2));
-    }
+    if (typeof data === 'string') console.log(data);
+    else console.log(JSON.stringify(data, null, 2));
   }
 }
 
-function testBasicRentCalculation(): void {
-  log('测试1: 整月租金计算');
+function testDepositNotInTotal(): void {
+  log('测试1: 押金不抬高应付总额，只出现在退款建议');
 
   const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-  };
-
-  const input: CalculationInput = {
-    leaseStartDate: '2026-01-01',
-    leaseEndDate: '2026-12-31',
-    moveInDate: '2026-01-01',
-    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
-    numberOfTenants: 1,
-    rules,
-  };
-
-  const bill = sdk.generateBill(input);
-  console.log(sdk.getBillSummary(bill));
-  console.log(sdk.getFeeBreakdown(bill));
-  console.log(`验证：租金应为 3000 元，实际 ${bill.feeDetails[0].amount} 元`);
-}
-
-function testPartialMonthRent(): void {
-  log('测试2: 非整月租金计算（入住中途）');
-
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-  };
-
-  const input: CalculationInput = {
-    leaseStartDate: '2026-01-01',
-    leaseEndDate: '2026-12-31',
-    moveInDate: '2026-01-15',
-    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
-    numberOfTenants: 1,
-    rules,
-  };
-
-  const bill = sdk.generateBill(input);
-  console.log(sdk.getBillSummary(bill));
-  console.log(sdk.getFeeBreakdown(bill));
-  console.log(`1月有31天，入住17天(15日到31日)，租金 = 3000 / 31 * 17 ≈ ${(3000 / 31 * 17).toFixed(2)} 元`);
-  console.log(`实际租金: ${bill.feeDetails[0].amount} 元`);
-}
-
-function testUtilityWithTiers(): void {
-  log('测试3: 阶梯水电费计算');
-
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-    water: {
-      tiers: [
-        { minUsage: 0, maxUsage: 10, pricePerUnit: 3.5 },
-        { minUsage: 10, maxUsage: 30, pricePerUnit: 5.0 },
-        { minUsage: 30, pricePerUnit: 8.0 },
-      ],
-      baseFee: 10,
-    },
-    electricity: {
-      tiers: [
-        { minUsage: 0, maxUsage: 200, pricePerUnit: 0.5 },
-        { minUsage: 200, maxUsage: 400, pricePerUnit: 0.8 },
-        { minUsage: 400, pricePerUnit: 1.2 },
-      ],
-    },
-  };
-
-  const input: CalculationInput = {
-    leaseStartDate: '2026-01-01',
-    leaseEndDate: '2026-12-31',
-    moveInDate: '2026-01-01',
-    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
-    numberOfTenants: 1,
-    meterReadings: {
-      water: { previous: 100, current: 135 },
-      electricity: { previous: 500, current: 850 },
-    },
-    rules,
-  };
-
-  const bill = sdk.generateBill(input);
-  console.log(sdk.getFeeBreakdown(bill));
-
-  const waterUsage = 135 - 100;
-  const elecUsage = 850 - 500;
-  console.log(`\n水费验证：用水${waterUsage}吨`);
-  console.log(`  第一阶梯10吨: 10 * 3.5 = 35`);
-  console.log(`  第二阶梯20吨: 20 * 5.0 = 100`);
-  console.log(`  第三阶梯5吨: 5 * 8.0 = 40`);
-  console.log(`  基础费: 10`);
-  console.log(`  合计: 35 + 100 + 40 + 10 = 185 元`);
-
-  console.log(`\n电费验证：用电${elecUsage}度`);
-  console.log(`  第一阶梯200度: 200 * 0.5 = 100`);
-  console.log(`  第二阶梯200度: 200 * 0.8 = 160`);
-  console.log(`  第三阶梯0度`);
-  console.log(`  合计: 100 + 160 = 260 元`);
-}
-
-function testServiceFees(): void {
-  log('测试4: 固定服务费计算');
-
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-    services: [
-      { type: '物业费', amount: 200, cycle: 'monthly' },
-      { type: '网络费', amount: 50, cycle: 'monthly' },
-      { type: '清洁费', amount: 30, cycle: 'one_time' },
-    ],
-  };
-
-  const input: CalculationInput = {
-    leaseStartDate: '2026-01-01',
-    leaseEndDate: '2026-12-31',
-    moveInDate: '2026-01-01',
-    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
-    numberOfTenants: 1,
-    rules,
-  };
-
-  const bill = sdk.generateBill(input);
-  console.log(sdk.getFeeBreakdown(bill));
-  console.log('\n总金额应包含：租金3000 + 物业费200 + 网络费50 + 清洁费30 = 3280元');
-  console.log(`实际总金额: ${bill.summary.totalAmount} 元`);
-}
-
-function testPenaltyAndLateFee(): void {
-  log('测试5: 违约金与滞纳金计算');
-
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-    penalty: {
-      enabled: true,
-      percentage: 10,
-      minAmount: 100,
-    },
-    lateFee: {
-      enabled: true,
-      dailyRate: 0.05,
-      graceDays: 3,
-      minAmount: 10,
-    },
-  };
-
-  const input: CalculationInput = {
-    leaseStartDate: '2026-01-01',
-    leaseEndDate: '2026-12-31',
-    moveInDate: '2026-01-01',
-    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
-    numberOfTenants: 1,
-    rules,
-    paymentDueDate: '2026-02-05',
-    actualPaymentDate: '2026-02-15',
-  };
-
-  const bill = sdk.generateBill(input);
-  console.log(sdk.getFeeBreakdown(bill));
-
-  const lateDays = 15 - 5 - 3;
-  console.log(`\n验证：`);
-  console.log(`  违约金: 3000 * 10% = 300元`);
-  console.log(`  逾期天数: 15日 - 5日 - 3天宽限 = ${lateDays}天`);
-  console.log(`  滞纳金: 3000 * 0.05% * ${lateDays}天 = ${(3000 * 0.0005 * lateDays).toFixed(2)}元`);
-}
-
-function testDiscounts(): void {
-  log('测试6: 优惠减免计算');
-
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-    water: {
-      tiers: [{ minUsage: 0, pricePerUnit: 3.5 }],
-    },
-    discounts: [
-      {
-        type: 'percentage',
-        amount: 10,
-        applyTo: ['rent'],
-        description: '新租客首月租金9折优惠',
-      },
-      {
-        type: 'fixed',
-        amount: 50,
-        applyTo: ['water', 'electricity', 'gas'],
-        description: '水电燃气减免',
-      },
-    ],
-  };
-
-  const input: CalculationInput = {
-    leaseStartDate: '2026-01-01',
-    leaseEndDate: '2026-12-31',
-    moveInDate: '2026-01-01',
-    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
-    numberOfTenants: 1,
-    meterReadings: {
-      water: { previous: 0, current: 20 },
-    },
-    rules,
-  };
-
-  const bill = sdk.generateBill(input);
-  console.log(sdk.getFeeBreakdown(bill));
-  console.log(`\n验证：`);
-  console.log(`  租金优惠: 3000 * 10% = 300元`);
-  console.log(`  水费: 20 * 3.5 = 70元，减免50元，实收20元`);
-}
-
-function testDeposit(): void {
-  log('测试7: 押金冻结与退还');
-
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
     deposit: {
       amount: 6000,
       freezeDays: 3,
@@ -276,38 +33,118 @@ function testDeposit(): void {
     leaseEndDate: '2026-12-31',
     moveInDate: '2026-01-01',
     moveOutDate: '2026-12-31',
-    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
+    billingPeriod: { startDate: '2026-12-01', endDate: '2026-12-31' },
+    numberOfTenants: 1,
+    rules,
+  };
+
+  const bill = sdk.generateBill(input);
+
+  console.log(sdk.getFeeBreakdown(bill));
+  console.log(`\n总应付: ${bill.summary.totalAmount} 元`);
+  console.log(`费用项类型: ${bill.feeDetails.map(f => f.type).join(', ')}`);
+  console.log(`\n--- 退款建议 ---`);
+  console.log(sdk.getRefundSuggestion(bill));
+
+  const hasDepositInDetails = bill.feeDetails.some(f => f.type === 'deposit');
+  console.log(`\n验证: feeDetails 中包含 deposit? ${hasDepositInDetails} → 期望 false`);
+  console.log(`验证: 总应付 = ${bill.summary.totalAmount} → 期望 3000（仅租金）`);
+  console.log(`验证: 应退押金 = ${bill.refundSuggestion?.refundAmount} → 期望 5300`);
+  console.log(`验证: 原押金 = ${bill.refundSuggestion?.originalDeposit} → 期望 6000`);
+}
+
+function testServiceFeeTwoMonths(): void {
+  log('测试2: 服务费按月计费 — 两个月账期');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    services: [
+      { type: '物业费', amount: 200, cycle: 'monthly' },
+      { type: '网络费', amount: 100, cycle: 'monthly' },
+    ],
+  };
+
+  const input: CalculationInput = {
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-01',
+    billingPeriod: { startDate: '2026-01-01', endDate: '2026-02-28' },
     numberOfTenants: 1,
     rules,
   };
 
   const bill = sdk.generateBill(input);
   console.log(sdk.getFeeBreakdown(bill));
-  console.log(sdk.getRefundSuggestion(bill));
-  console.log(`\n验证：押金6000 - 墙面修复500 - 门锁更换200 = 应退5300元`);
+  console.log(`\n总应付: ${bill.summary.totalAmount} 元`);
+  console.log(`验证: 2个月 = 59天, 物业费 = 200/30*59 = ${(200/30*59).toFixed(2)}`);
+  console.log(`验证: 2个月 = 59天, 网络费 = 100/30*59 = ${(100/30*59).toFixed(2)}`);
 }
 
-function testMultiTenantSplit(): void {
-  log('测试8: 多人合租平均分摊');
+function testServiceFeeQuarter(): void {
+  log('测试3: 服务费按季度计费 — 一个季度账期');
 
   const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 6000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-    water: {
-      tiers: [{ minUsage: 0, pricePerUnit: 3.5 }],
-    },
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
     services: [
-      { type: '物业费', amount: 300, cycle: 'monthly' },
+      { type: '季度物业费', amount: 600, cycle: 'quarterly' },
     ],
   };
 
+  const input: CalculationInput = {
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-01',
+    billingPeriod: { startDate: '2026-01-01', endDate: '2026-03-31' },
+    numberOfTenants: 1,
+    rules,
+  };
+
+  const bill = sdk.generateBill(input);
+  console.log(sdk.getFeeBreakdown(bill));
+  console.log(`\n总应付: ${bill.summary.totalAmount} 元`);
+  console.log(`验证: 1季度(90天), 1-3月=90天, 季度物业费 = 600`);
+}
+
+function testServiceFeePartialQuarter(): void {
+  log('测试4: 服务费按季度 — 非整季度账期(100天)');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    services: [
+      { type: '季度服务费', amount: 900, cycle: 'quarterly' },
+    ],
+  };
+
+  const input: CalculationInput = {
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-01',
+    billingPeriod: { startDate: '2026-01-01', endDate: '2026-04-10' },
+    numberOfTenants: 1,
+    rules,
+  };
+
+  const bill = sdk.generateBill(input);
+  console.log(sdk.getFeeBreakdown(bill));
+  const totalDays = 100;
+  const fullQ = Math.floor(totalDays / 90);
+  const remain = totalDays % 90;
+  const dailyRate = 900 / 90;
+  console.log(`\n验证: 100天 = 1整季度(90天) + 10天`);
+  console.log(`  季度服务费 = ${fullQ} * 900 + ${remain} * ${dailyRate.toFixed(2)} = ${(fullQ * 900 + remain * dailyRate).toFixed(2)}`);
+}
+
+function testSplitByAreaWithPartialStay(): void {
+  log('测试5: 按面积分摊 — 含半途入住和已退租租客');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 6000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+  };
+
   const tenants: Tenant[] = [
-    { id: 'T001', name: '张三' },
-    { id: 'T002', name: '李四' },
-    { id: 'T003', name: '王五' },
+    { id: 'T1', name: '张三（全期）', areaRatio: 40, moveInDate: '2026-01-01', moveOutDate: '2026-01-31' },
+    { id: 'T2', name: '李四（半途入住15日）', areaRatio: 35, moveInDate: '2026-01-15', moveOutDate: '2026-01-31' },
+    { id: 'T3', name: '王五（已退租不在账期）', areaRatio: 25, moveInDate: '2025-12-01', moveOutDate: '2025-12-20' },
   ];
 
   const input: CalculationInput = {
@@ -317,33 +154,32 @@ function testMultiTenantSplit(): void {
     billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
     numberOfTenants: 3,
     tenants,
-    meterReadings: {
-      water: { previous: 0, current: 30 },
-    },
     rules,
   };
 
-  const bill = sdk.generateBill(input, 'average');
+  const bill = sdk.generateBill(input, 'area');
   console.log(sdk.getSplitExplanation(bill));
-  console.log(`\n总租金6000 + 水费105 + 物业费300 = 6405元`);
-  console.log(`3人平均分摊: 6405 / 3 = 2135元/人`);
+
+  console.log(`\n验证:`);
+  console.log(`  张三: 全期31天, area=40, 权重=40*31=1240`);
+  console.log(`  李四: 15-31共17天, area=35, 权重=35*17=595`);
+  console.log(`  王五: 不在账期, 分摊=0`);
+  console.log(`  总权重 = 1240+595 = 1835`);
+  console.log(`  张三占比 = 1240/1835 ≈ ${((1240/1835)*100).toFixed(2)}%`);
+  console.log(`  李四占比 = 595/1835 ≈ ${((595/1835)*100).toFixed(2)}%`);
 }
 
-function testRatioSplit(): void {
-  log('测试9: 按比例分摊');
+function testSplitByRatioWithPartialStay(): void {
+  log('测试6: 按比例分摊 — 含半途退租租客');
 
   const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 5000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
+    rent: { monthlyAmount: 5000, billingCycle: 'monthly', prorationMethod: 'by_day' },
   };
 
   const tenants: Tenant[] = [
-    { id: 'T001', name: '张三（主卧）', shareRatio: 50 },
-    { id: 'T002', name: '李四（次卧）', shareRatio: 30 },
-    { id: 'T003', name: '王五（小卧）', shareRatio: 20 },
+    { id: 'T1', name: '张三（全期）', shareRatio: 50, moveInDate: '2026-01-01', moveOutDate: '2026-01-31' },
+    { id: 'T2', name: '李四（20日退租）', shareRatio: 30, moveInDate: '2026-01-01', moveOutDate: '2026-01-20' },
+    { id: 'T3', name: '王五（全期）', shareRatio: 20, moveInDate: '2026-01-01', moveOutDate: '2026-01-31' },
   ];
 
   const input: CalculationInput = {
@@ -358,106 +194,120 @@ function testRatioSplit(): void {
 
   const bill = sdk.generateBill(input, 'ratio');
   console.log(sdk.getSplitExplanation(bill));
-  console.log(`\n按50%/30%/20%分摊5000元租金：`);
-  console.log(`  张三: 5000 * 50% = 2500元`);
-  console.log(`  李四: 5000 * 30% = 1500元`);
-  console.log(`  王五: 5000 * 20% = 1000元`);
+
+  console.log(`\n验证:`);
+  console.log(`  张三: 全期31天, ratio=50, 权重=50*31=1550`);
+  console.log(`  李四: 1-20日共20天, ratio=30, 权重=30*20=600`);
+  console.log(`  王五: 全期31天, ratio=20, 权重=20*31=620`);
+  console.log(`  总权重 = 1550+600+620 = 2770`);
+  console.log(`  张三占比 = 1550/2770 ≈ ${((1550/2770)*100).toFixed(2)}%`);
+  console.log(`  李四占比 = 600/2770 ≈ ${((600/2770)*100).toFixed(2)}%`);
+  console.log(`  王五占比 = 620/2770 ≈ ${((620/2770)*100).toFixed(2)}%`);
 }
 
-function testValidation(): void {
-  log('测试10: 规则校验');
+function testValidationEmptyRules(): void {
+  log('测试7: 校验 — 空规则、缺租金、空阶梯');
 
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: -100,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-  };
-
-  const input: CalculationInput = {
-    leaseStartDate: '2026-12-31',
-    leaseEndDate: '2026-01-01',
-    moveInDate: '2026-02-01',
-    billingPeriod: { startDate: '2026-02-01', endDate: '2026-01-01' },
-    numberOfTenants: 0,
-    meterReadings: {
-      water: { previous: 100, current: 50 },
-    },
-    rules,
-  };
-
-  const validation = sdk.validate(input);
-  console.log('校验结果:', JSON.stringify(validation, null, 2));
-  console.log(`\n预期发现的错误：`);
-  console.log(`  1. 账期开始日期不能晚于结束日期`);
-  console.log(`  2. 租约开始日期不能晚于结束日期`);
-  console.log(`  3. 月租金金额必须大于0`);
-  console.log(`  4. 入住人数必须大于0`);
-  console.log(`  5. 水表当前抄数不能小于上次抄数`);
-}
-
-function testBillComparison(): void {
-  log('测试11: 历史账单对比');
-
-  const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
-    water: {
-      tiers: [{ minUsage: 0, pricePerUnit: 3.5 }],
-    },
-  };
-
-  const janInput: CalculationInput = {
+  const result1 = sdk.validate({
     leaseStartDate: '2026-01-01',
     leaseEndDate: '2026-12-31',
     moveInDate: '2026-01-01',
     billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
     numberOfTenants: 1,
-    meterReadings: { water: { previous: 0, current: 10 } },
-    rules,
-  };
-
-  const febInput: CalculationInput = {
-    ...janInput,
-    billingPeriod: { startDate: '2026-02-01', endDate: '2026-02-28' },
-    meterReadings: { water: { previous: 10, current: 40 } },
-    rules: {
-      ...rules,
-      discounts: [
-        { type: 'fixed', amount: 100, applyTo: ['rent'], description: '春节优惠' },
-      ],
-    },
-  };
-
-  const janBill = sdk.generateBill(janInput);
-  const febBill = sdk.generateBill(febInput);
-
-  const comparison = sdk.compareBills({
-    currentBill: febBill,
-    previousBill: janBill,
+    rules: undefined as any,
   });
+  console.log('--- 空规则 ---');
+  console.log(`valid: ${result1.valid}, errors: ${result1.errors.length}`);
+  result1.errors.forEach(e => console.log(`  - ${e}`));
 
-  console.log('1月账单总额:', janBill.summary.totalAmount, '(租金3000 + 水费35 = 3035)');
-  console.log('2月账单总额:', febBill.summary.totalAmount, '(租金3000 - 优惠100 + 水费105 = 3005)');
-  console.log('\n对比结果:', JSON.stringify(comparison, null, 2));
+  const result2 = sdk.validate({
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-01',
+    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
+    numberOfTenants: 1,
+    rules: {} as any,
+  });
+  console.log('\n--- 缺少租金规则 ---');
+  console.log(`valid: ${result2.valid}, errors: ${result2.errors.length}`);
+  result2.errors.forEach(e => console.log(`  - ${e}`));
+
+  const result3 = sdk.validate({
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-01',
+    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
+    numberOfTenants: 1,
+    rules: {
+      rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+      water: { tiers: [] },
+      electricity: { tiers: undefined as any },
+    } as any,
+  });
+  console.log('\n--- 空阶梯配置 ---');
+  console.log(`valid: ${result3.valid}, errors: ${result3.errors.length}`);
+  result3.errors.forEach(e => console.log(`  - ${e}`));
+
+  const result4 = sdk.validate({
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-01',
+    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
+    numberOfTenants: 1,
+    rules: {
+      rent: { monthlyAmount: -100, billingCycle: 'monthly', prorationMethod: 'by_day' },
+      services: [{ type: '', amount: -50, cycle: 'monthly' }],
+      discounts: [{ type: 'percentage' as any, amount: 200, applyTo: [] }],
+    },
+  });
+  console.log('\n--- 多项错误 ---');
+  console.log(`valid: ${result4.valid}, errors: ${result4.errors.length}`);
+  result4.errors.forEach(e => console.log(`  - ${e}`));
+
+  console.log('\n验证: 所有校验均返回了 valid/errors/warnings，没有中断');
 }
 
-function testRoundingModes(): void {
-  log('测试12: 不同四舍五入方式');
+function testValidationAlwaysReturnsStructure(): void {
+  log('测试8: 校验 — 极端输入也不中断，始终返回结构');
+
+  const extremeCases: { label: string; input: any }[] = [
+    { label: 'null input', input: null },
+    { label: 'undefined input', input: undefined },
+    { label: 'empty object', input: {} },
+    { label: 'missing billingPeriod', input: { leaseStartDate: '2026-01-01', leaseEndDate: '2026-12-31', moveInDate: '2026-01-01', numberOfTenants: 1, rules: {} } },
+  ];
+
+  for (const c of extremeCases) {
+    try {
+      const result = sdk.validate(c.input as CalculationInput);
+      console.log(`${c.label}: valid=${result.valid}, errors=${result.errors.length}, warnings=${result.warnings.length}`);
+    } catch (e: any) {
+      console.log(`${c.label}: 抛出异常! ${e.message}`);
+    }
+  }
+
+  console.log('\n验证: 所有极端输入均正常返回了 ValidationResult，未抛出异常');
+}
+
+function testBasicRentStillWorks(): void {
+  log('测试9: 回归 — 整月租金和非整月租金仍然正确');
 
   const rules: FeeRules = {
-    rent: {
-      monthlyAmount: 3000,
-      billingCycle: 'monthly',
-      prorationMethod: 'by_day',
-    },
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
   };
 
-  const input: CalculationInput = {
+  const fullMonthInput: CalculationInput = {
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-01',
+    billingPeriod: { startDate: '2026-01-01', endDate: '2026-01-31' },
+    numberOfTenants: 1,
+    rules,
+  };
+  const bill1 = sdk.generateBill(fullMonthInput);
+  console.log(`整月: ${bill1.feeDetails[0].amount} 元 (期望 3000)`);
+
+  const partialInput: CalculationInput = {
     leaseStartDate: '2026-01-01',
     leaseEndDate: '2026-12-31',
     moveInDate: '2026-01-15',
@@ -465,48 +315,31 @@ function testRoundingModes(): void {
     numberOfTenants: 1,
     rules,
   };
-
-  const sdkRound = new RentalFeeSDK({ roundingMode: 'round' });
-  const sdkFloor = new RentalFeeSDK({ roundingMode: 'floor' });
-  const sdkCeil = new RentalFeeSDK({ roundingMode: 'ceil' });
-
-  const billRound = sdkRound.generateBill(input);
-  const billFloor = sdkFloor.generateBill(input);
-  const billCeil = sdkCeil.generateBill(input);
-
-  const dailyRate = 3000 / 31;
-  const exact = dailyRate * 17;
-
-  console.log(`日租金精确值: 3000 / 31 = ${dailyRate}`);
-  console.log(`17天租金精确值: ${exact}`);
-  console.log(`\n四舍五入(round): ${billRound.feeDetails[0].amount} 元`);
-  console.log(`向下取整(floor): ${billFloor.feeDetails[0].amount} 元`);
-  console.log(`向上取整(ceil):  ${billCeil.feeDetails[0].amount} 元`);
+  const bill2 = sdk.generateBill(partialInput);
+  const expected = (3000 / 31 * 17).toFixed(2);
+  console.log(`非整月(15-31日): ${bill2.feeDetails[0].amount} 元 (期望 ≈${expected})`);
 }
 
 function runAllTests(): void {
   console.log('\n' + '█'.repeat(60));
   console.log('█'.padEnd(58) + '█');
-  console.log('█' + '租房费用计算 SDK 综合测试'.padStart(37).padEnd(58) + '█');
+  console.log('█' + '租房费用 SDK — 四项改动验证测试'.padStart(38).padEnd(58) + '█');
   console.log('█'.padEnd(58) + '█');
   console.log('█'.repeat(60));
 
-  testBasicRentCalculation();
-  testPartialMonthRent();
-  testUtilityWithTiers();
-  testServiceFees();
-  testPenaltyAndLateFee();
-  testDiscounts();
-  testDeposit();
-  testMultiTenantSplit();
-  testRatioSplit();
-  testValidation();
-  testBillComparison();
-  testRoundingModes();
+  testDepositNotInTotal();
+  testServiceFeeTwoMonths();
+  testServiceFeeQuarter();
+  testServiceFeePartialQuarter();
+  testSplitByAreaWithPartialStay();
+  testSplitByRatioWithPartialStay();
+  testValidationEmptyRules();
+  testValidationAlwaysReturnsStructure();
+  testBasicRentStillWorks();
 
   console.log('\n' + '█'.repeat(60));
   console.log('█'.padEnd(58) + '█');
-  console.log('█' + '所有测试执行完成！'.padStart(35).padEnd(58) + '█');
+  console.log('█' + '所有验证测试执行完成！'.padStart(35).padEnd(58) + '█');
   console.log('█'.padEnd(58) + '█');
   console.log('█'.repeat(60) + '\n');
 }

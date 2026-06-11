@@ -170,8 +170,9 @@ export interface Bill {
 
 export interface RefundSuggestion {
   shouldRefund: boolean;
+  originalDeposit: number;
   refundAmount: number;
-  refundItems: {
+  deductions: {
     reason: string;
     amount: number;
   }[];

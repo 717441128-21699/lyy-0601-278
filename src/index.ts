@@ -173,13 +173,14 @@ export class RentalFeeSDK {
     const rs = bill.refundSuggestion;
     const lines: string[] = [];
     lines.push(`是否需要退款: ${rs.shouldRefund ? '是' : '否'}`);
-    lines.push(`退款金额: ${rs.refundAmount}元`);
+    lines.push(`原押金: ${rs.originalDeposit}元`);
+    lines.push(`应退金额: ${rs.refundAmount}元`);
     if (rs.suggestedDate) {
       lines.push(`建议退款日期: ${rs.suggestedDate}`);
     }
-    if (rs.refundItems && rs.refundItems.length > 0) {
-      lines.push('退款明细:');
-      rs.refundItems.forEach((item) => {
+    if (rs.deductions && rs.deductions.length > 0) {
+      lines.push('扣除明细:');
+      rs.deductions.forEach((item) => {
         lines.push(`  - ${item.reason}: ${item.amount}元`);
       });
     }

@@ -50,12 +50,6 @@ export function generateBill(
         roundingMode,
         precision,
       });
-      if (depositResult.frozen) {
-        feeDetails.push(depositResult.frozen);
-      }
-      if (depositResult.refund) {
-        feeDetails.push(depositResult.refund);
-      }
       if (depositResult.refundSuggestion) {
         refundSuggestion = depositResult.refundSuggestion;
       }
@@ -100,7 +94,7 @@ export function generateBill(
 
     if (input.rules.penalty && input.rules.penalty.enabled) {
       const baseAmount = feeDetails
-        .filter((f) => f.type !== 'discount' && f.type !== 'deposit')
+        .filter((f) => f.type !== 'discount')
         .reduce((sum, f) => sum + f.amount, 0);
       const penalty = calculatePenalty({
         penaltyRule: input.rules.penalty,
@@ -113,7 +107,7 @@ export function generateBill(
 
     if (input.rules.lateFee && input.rules.lateFee.enabled && input.paymentDueDate && input.actualPaymentDate) {
       const baseAmount = feeDetails
-        .filter((f) => f.type !== 'discount' && f.type !== 'deposit')
+        .filter((f) => f.type !== 'discount')
         .reduce((sum, f) => sum + f.amount, 0);
       const lateFee = calculateLateFee({
         lateFeeRule: input.rules.lateFee,
