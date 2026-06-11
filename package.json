@@ -1,0 +1,27 @@
+{
+  "name": "rental-fee-sdk",
+  "version": "1.0.0",
+  "description": "租房费用计算类库 SDK - 支持租金分摊、押金管理、阶梯水电费、违约金、滞纳金、优惠减免等功能",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "ts-node tests/index.test.ts",
+    "dev": "ts-node src/index.ts"
+  },
+  "keywords": [
+    "rental",
+    "fee",
+    "calculator",
+    "sdk",
+    "租房",
+    "费用计算"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  }
+}
