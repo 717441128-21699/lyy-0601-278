@@ -5,6 +5,7 @@ import {
   DateRange,
   ServiceFeeRule,
   DiscountRule,
+  FeeType,
 } from '../types';
 import { roundAmount } from '../utils/rounding';
 import {
@@ -22,11 +23,15 @@ import { calculateRent } from './rent';
 
 export type PaymentPeriodKind = 'regular' | 'move_in' | 'move_out' | 'deposit';
 
+export type ReconciliationStatus = 'pending' | 'partial' | 'paid' | 'overdue';
+
 export type DueDateRule = {
   offsetDays?: number;
   fixedDayOfMonth?: number;
   shiftHoliday?: boolean;
 };
+
+export type DiscountScope = 'first_period' | 'all_periods' | 'service_only';
 
 export interface PaymentScheduleItem {
   periodIndex: number;
@@ -49,6 +54,47 @@ export interface PaymentScheduleItem {
   discountTotal: number;
   totalExpected: number;
   note: string;
+  status: ReconciliationStatus;
+  receivedAmount: number;
+  remainingAmount: number;
+  overdueDays: number;
+  progress: number;
+}
+
+export interface PaymentRecord {
+  id?: string;
+  date: string;
+  amount: number;
+  method?: string;
+  remark?: string;
+  allocations: {
+    periodIndex: number;
+    feeTypes: (FeeType | 'deposit' | 'water' | 'electricity')[];
+    amount: number;
+  }[];
+}
+
+export interface ReconciliationSummaryItem {
+  paymentId: string;
+  paymentDate: string;
+  paymentAmount: number;
+  allocations: {
+    periodIndex: number;
+    periodKind: PaymentPeriodKind;
+    periodLabel: string;
+    feeType: string;
+    allocatedAmount: number;
+  }[];
+}
+
+export interface ReconciliationResult {
+  scheduleItems: PaymentScheduleItem[];
+  paymentRecords: PaymentRecord[];
+  summaryItems: ReconciliationSummaryItem[];
+  totalExpected: number;
+  totalReceived: number;
+  totalRemaining: number;
+  totalOverdue: number;
 }
 
 export interface PaymentScheduleInput {
@@ -63,7 +109,7 @@ export interface PaymentScheduleInput {
   waterEstimatePerMonth?: number;
   electricityEstimatePerMonth?: number;
   utilityEstimatePerMonth?: number;
-  discounts?: DiscountRule[];
+  discountScope?: DiscountScope;
   roundingMode?: RoundingMode;
   precision?: number;
 }
@@ -93,7 +139,7 @@ export function generatePaymentSchedule(input: PaymentScheduleInput): PaymentSch
     waterEstimatePerMonth = 0,
     electricityEstimatePerMonth = 0,
     utilityEstimatePerMonth = 0,
-    discounts,
+    discountScope = 'first_period',
     roundingMode = 'round',
     precision = 2,
   } = input;
@@ -129,9 +175,16 @@ export function generatePaymentSchedule(input: PaymentScheduleInput): PaymentSch
       discountTotal: 0,
       totalExpected: dep,
       note: '押金',
+      status: 'pending',
+      receivedAmount: 0,
+      remainingAmount: dep,
+      overdueDays: 0,
+      progress: 0,
     });
     totalDeposit += dep;
   }
+
+  const ruleDiscounts = rules.discounts || [];
 
   for (let i = 0; i < periods.length; i++) {
     const period = periods[i];
@@ -178,11 +231,20 @@ export function generatePaymentSchedule(input: PaymentScheduleInput): PaymentSch
 
     const discountItems: { type: string; amount: number }[] = [];
     let discountTotal = 0;
-    if (discounts && discounts.length > 0 && isMoveInPeriod) {
-      for (const d of discounts) {
+    const shouldApplyDiscount =
+      (discountScope === 'first_period' && isMoveInPeriod) ||
+      discountScope === 'all_periods' ||
+      discountScope === 'service_only';
+
+    if (ruleDiscounts.length > 0 && shouldApplyDiscount) {
+      for (const d of ruleDiscounts) {
         let base = 0;
-        if (d.applyTo.includes('rent')) base += rent;
-        if (d.applyTo.includes('service')) base += serviceFeeTotal;
+        if (discountScope === 'service_only') {
+          if (d.applyTo.includes('service')) base += serviceFeeTotal;
+        } else {
+          if (d.applyTo.includes('rent')) base += rent;
+          if (d.applyTo.includes('service')) base += serviceFeeTotal;
+        }
         if (base <= 0) continue;
         let discAmt = 0;
         if (d.type === 'fixed') discAmt = d.amount;
@@ -204,8 +266,8 @@ export function generatePaymentSchedule(input: PaymentScheduleInput): PaymentSch
     if (isMoveInPeriod) notes.push('首期');
     if (isMoveOutPeriod) notes.push('末期');
     const kind: PaymentPeriodKind = isMoveInPeriod && !isMoveOutPeriod ? 'move_in' : isMoveOutPeriod ? 'move_out' : 'regular';
-    if (kind === 'move_in' && rentDetail.description.includes('折算')) notes.push('按实际天数折算');
-    if (kind === 'move_out' && rentDetail.description.includes('折算')) notes.push('按实际天数折算');
+    if (kind === 'move_in' && (rentDetail.description.includes('折算') || rentDetail.description.includes('零散'))) notes.push('按实际天数折算');
+    if (kind === 'move_out' && (rentDetail.description.includes('折算') || rentDetail.description.includes('零散'))) notes.push('按实际天数折算');
 
     items.push({
       periodIndex: i + 1,
@@ -222,6 +284,11 @@ export function generatePaymentSchedule(input: PaymentScheduleInput): PaymentSch
       discountTotal: roundAmount(-discountTotal, roundingMode, precision),
       totalExpected,
       note: notes.join('，') || '常规期',
+      status: 'pending',
+      receivedAmount: 0,
+      remainingAmount: totalExpected,
+      overdueDays: 0,
+      progress: 0,
     });
   }
 
@@ -247,6 +314,105 @@ export function generatePaymentSchedule(input: PaymentScheduleInput): PaymentSch
   };
 }
 
+export function applyPayments(
+  schedule: PaymentScheduleResult,
+  payments: PaymentRecord[],
+  options?: { asOfDate?: string; roundingMode?: RoundingMode; precision?: number }
+): ReconciliationResult {
+  const roundingMode = options?.roundingMode || 'round';
+  const precision = options?.precision ?? 2;
+  const asOfDate = options?.asOfDate || formatDate(new Date());
+  const asOf = parseDate(asOfDate);
+
+  const items: PaymentScheduleItem[] = schedule.items.map(it => ({ ...it }));
+  const summaryItems: ReconciliationSummaryItem[] = [];
+  let totalExpected = 0;
+  let totalReceived = 0;
+  let totalRemaining = 0;
+  let totalOverdue = 0;
+
+  for (const p of payments) {
+    const allocations: ReconciliationSummaryItem['allocations'] = [];
+    for (const alloc of p.allocations) {
+      const item = items.find(it => it.periodIndex === alloc.periodIndex);
+      if (!item) continue;
+      const amountPerFeeType = alloc.feeTypes.length > 0
+        ? alloc.amount / alloc.feeTypes.length
+        : alloc.amount;
+      for (const ft of alloc.feeTypes) {
+        allocations.push({
+          periodIndex: item.periodIndex,
+          periodKind: item.kind,
+          periodLabel: periodLabel(item),
+          feeType: feeTypeLabel(ft),
+          allocatedAmount: roundAmount(amountPerFeeType, roundingMode, precision),
+        });
+      }
+      item.receivedAmount = roundAmount(item.receivedAmount + alloc.amount, roundingMode, precision);
+    }
+    summaryItems.push({
+      paymentId: p.id || `PAY-${summaryItems.length + 1}`,
+      paymentDate: p.date,
+      paymentAmount: p.amount,
+      allocations,
+    });
+    totalReceived += p.amount;
+  }
+
+  for (const item of items) {
+    item.remainingAmount = roundAmount(item.totalExpected - item.receivedAmount, roundingMode, precision);
+    item.progress = item.totalExpected > 0
+      ? roundAmount((item.receivedAmount / item.totalExpected) * 100, roundingMode, 0)
+      : 0;
+    if (item.remainingAmount <= 0.001) {
+      item.status = 'paid';
+    } else if (item.receivedAmount > 0.001) {
+      item.status = 'partial';
+    } else if (asOf > parseDate(item.dueDate)) {
+      item.status = 'overdue';
+      item.overdueDays = daysBetween(item.dueDate, asOfDate);
+      totalOverdue += item.remainingAmount;
+    } else {
+      item.status = 'pending';
+    }
+    totalExpected += item.totalExpected;
+    totalRemaining += item.remainingAmount;
+  }
+
+  return {
+    scheduleItems: items,
+    paymentRecords: payments,
+    summaryItems,
+    totalExpected: roundAmount(totalExpected, roundingMode, precision),
+    totalReceived: roundAmount(totalReceived, roundingMode, precision),
+    totalRemaining: roundAmount(totalRemaining, roundingMode, precision),
+    totalOverdue: roundAmount(totalOverdue, roundingMode, precision),
+  };
+}
+
+function periodLabel(item: PaymentScheduleItem): string {
+  const kindLabels: Record<string, string> = {
+    regular: '常规期',
+    move_in: '首期',
+    move_out: '末期',
+    deposit: '押金期',
+  };
+  if (item.kind === 'deposit') return '押金期';
+  return `第${item.periodIndex}期(${kindLabels[item.kind]}，${item.period.startDate}~${item.period.endDate})`;
+}
+
+function feeTypeLabel(ft: string): string {
+  const labels: Record<string, string> = {
+    rent: '租金',
+    deposit: '押金',
+    water: '水费预估',
+    electricity: '电费预估',
+    service: '服务费',
+    discount: '优惠',
+  };
+  return labels[ft] || ft;
+}
+
 function generatePeriods(
   startDate: string,
   endDate: string,
@@ -261,7 +427,7 @@ function generatePeriods(
   }
   const periods: DateRange[] = [];
   let current = startDate;
-  while (current < endDate) {
+  while (current <= endDate) {
     let periodEnd = addDays(current, customDays - 1);
     if (periodEnd > endDate) periodEnd = endDate;
     periods.push({ startDate: current, endDate: periodEnd });
@@ -371,7 +537,7 @@ export function computeDueDate(
   if (fixedDay !== undefined && kind !== 'deposit') {
     let targetYear = start.getFullYear();
     let targetMonth = start.getMonth();
-    if (offsetDays < 0) {
+    if (offsetDays > 0) {
       targetMonth -= 1;
       if (targetMonth < 0) {
         targetMonth = 11;
@@ -381,18 +547,26 @@ export function computeDueDate(
     const lastDayOfMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
     const safeDay = Math.max(1, Math.min(fixedDay, lastDayOfMonth));
     due = new Date(targetYear, targetMonth, safeDay);
+    if (offsetDays !== 0 && !rule?.fixedDayOfMonth) {
+      const delta = -offsetDays;
+      due = new Date(due.getTime() + delta * 24 * 60 * 60 * 1000);
+    } else if (offsetDays !== 0 && rule?.fixedDayOfMonth !== undefined) {
+      const delta = offsetDays > 0 ? 0 : offsetDays;
+      due = new Date(due.getTime() + delta * 24 * 60 * 60 * 1000);
+    }
   } else {
     const delta = kind === 'deposit' ? offsetDays : -offsetDays;
     due = new Date(start.getTime() + delta * 24 * 60 * 60 * 1000);
   }
 
-  if (due < mi && kind !== 'deposit') due = new Date(mi);
+  if (kind === 'move_in' && due < mi) {
+    due = new Date(mi);
+  }
 
   if (shiftHoliday && isWeekend(due)) {
-    let delta = due.getDay() === 0 ? 1 : 2;
+    const delta = due.getDay() === 0 ? 1 : 2;
     due = new Date(due.getTime() + delta * 24 * 60 * 60 * 1000);
   }
 
   return formatDate(due);
 }
-

@@ -23,7 +23,7 @@ import { calculateUtility, UtilityCalculationInput } from './calculators/utility
 import { calculateServiceFees, ServiceFeeCalculationInput } from './calculators/service';
 import { calculatePenalty, PenaltyCalculationInput, calculateLateFee, LateFeeCalculationInput } from './calculators/penalty';
 import { calculateDiscounts, DiscountCalculationInput } from './calculators/discount';
-import { generatePaymentSchedule, PaymentScheduleInput, PaymentScheduleResult, PaymentPeriodKind, DueDateRule, computeDueDate } from './calculators/paymentSchedule';
+import { generatePaymentSchedule, applyPayments, PaymentScheduleInput, PaymentScheduleResult, PaymentPeriodKind, DueDateRule, DiscountScope, PaymentRecord, ReconciliationResult, ReconciliationStatus, computeDueDate } from './calculators/paymentSchedule';
 
 export class RentalFeeSDK {
   private defaultRoundingMode: RoundingMode;
@@ -215,14 +215,23 @@ export class RentalFeeSDK {
       move_out: '末期',
       deposit: '押金期',
     };
+    const statusLabels: Record<string, string> = {
+      pending: '待收',
+      partial: '部分收款',
+      paid: '已收',
+      overdue: '逾期',
+    };
     for (const item of schedule.items) {
       const k = kindLabels[item.kind] || item.kind;
+      const st = statusLabels[item.status] || item.status;
       if (item.kind === 'deposit') {
-        lines.push(`【${k}】第${item.periodIndex > 0 ? item.periodIndex : ''}期: ${item.dueDate}前支付`);
+        lines.push(`【${k}】第${item.periodIndex > 0 ? item.periodIndex : ''}期: ${item.dueDate}前支付 [${st}]`);
         lines.push(`  押金: ${item.deposit}元`);
+        lines.push(`  进度: 已收${item.receivedAmount}/${item.totalExpected}元 (${item.progress}%)  剩余: ${item.remainingAmount}元`);
+        if (item.overdueDays > 0) lines.push(`  逾期: ${item.overdueDays}天`);
         lines.push(`  备注: ${item.note}`);
       } else {
-        lines.push(`第${item.periodIndex}期【${k}】: ${item.period.startDate} ~ ${item.period.endDate}`);
+        lines.push(`第${item.periodIndex}期【${k}】: ${item.period.startDate} ~ ${item.period.endDate} [${st}]`);
         lines.push(`  应付日期: ${item.dueDate}`);
         lines.push(`  租金: ${item.rent}元`);
         item.serviceFees.forEach(sf => {
@@ -237,6 +246,8 @@ export class RentalFeeSDK {
           lines.push(`  优惠(${d.type}): ${d.amount}元`);
         });
         lines.push(`  本期合计: ${item.totalExpected}元`);
+        lines.push(`  进度: 已收${item.receivedAmount}/${item.totalExpected}元 (${item.progress}%)  剩余: ${item.remainingAmount}元`);
+        if (item.overdueDays > 0) lines.push(`  逾期: ${item.overdueDays}天`);
         lines.push(`  备注: ${item.note}`);
       }
       lines.push('');
@@ -249,6 +260,60 @@ export class RentalFeeSDK {
     if (schedule.totalDeposit) lines.push(`  押金: ${schedule.totalDeposit}元`);
     if (schedule.totalDiscounts) lines.push(`  优惠合计: ${schedule.totalDiscounts}元`);
     lines.push(`  全部合计: ${schedule.totalAll}元`);
+    return lines.join('\n');
+  }
+
+  applyPayments(
+    schedule: PaymentScheduleResult,
+    payments: PaymentRecord[],
+    options?: { asOfDate?: string }
+  ): ReconciliationResult {
+    return applyPayments(schedule, payments, {
+      ...options,
+      roundingMode: this.defaultRoundingMode,
+      precision: this.defaultPrecision,
+    });
+  }
+
+  getReconciliationText(rec: ReconciliationResult): string {
+    const lines: string[] = [];
+    const statusLabels: Record<string, string> = {
+      pending: '待收',
+      partial: '部分收款',
+      paid: '已收',
+      overdue: '逾期',
+    };
+    const kindLabels: Record<string, string> = {
+      regular: '常规期',
+      move_in: '首期',
+      move_out: '末期',
+      deposit: '押金期',
+    };
+
+    lines.push('═══ 收款日历（含对账状态）═══');
+    for (const item of rec.scheduleItems) {
+      const k = kindLabels[item.kind] || item.kind;
+      const st = statusLabels[item.status] || item.status;
+      lines.push(`第${item.periodIndex}期【${k}】 ${item.period.startDate}~${item.period.endDate}  应收日:${item.dueDate}  [${st}]`);
+      lines.push(`  应收${item.totalExpected}元 / 已收${item.receivedAmount}元 / 剩余${item.remainingAmount}元 (进度${item.progress}%)`);
+      if (item.overdueDays > 0) lines.push(`  ⚠ 逾期${item.overdueDays}天`);
+    }
+
+    lines.push('');
+    lines.push('═══ 对账明细（每笔收款对应到期与费用项）═══');
+    for (const s of rec.summaryItems) {
+      lines.push(`收款 ${s.paymentId}  日期:${s.paymentDate}  金额:${s.paymentAmount}元`);
+      for (const a of s.allocations) {
+        lines.push(`  → ${a.periodLabel} · ${a.feeType}: ${a.allocatedAmount}元`);
+      }
+    }
+
+    lines.push('');
+    lines.push('═══ 对账汇总 ═══');
+    lines.push(`应收总额: ${rec.totalExpected}元`);
+    lines.push(`已收总额: ${rec.totalReceived}元`);
+    lines.push(`剩余应收: ${rec.totalRemaining}元`);
+    if (rec.totalOverdue > 0) lines.push(`逾期金额: ${rec.totalOverdue}元 ⚠`);
     return lines.join('\n');
   }
 

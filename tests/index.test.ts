@@ -377,11 +377,182 @@ function runAllTests(): void {
   testPaymentScheduleWithDiscounts();
   testHolidayShiftDueDate();
 
+  testCustomDaysSingleDay();
+  testReconciliationStatus();
+  testCombinedAndSplitPayments();
+  testDueDateRuleCombined();
+  testDiscountScopeFromFeeRules();
+
   console.log('\n' + '█'.repeat(60));
   console.log('█'.padEnd(58) + '█');
   console.log('█' + '所有验证测试执行完成！'.padStart(35).padEnd(58) + '█');
   console.log('█'.padEnd(58) + '█');
   console.log('█'.repeat(60) + '\n');
+}
+
+function testCustomDaysSingleDay(): void {
+  log('测试17: 自定义天数1天租期 — 当天这一期不漏期');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    services: [{ type: '物业费', amount: 150, cycle: 'monthly' }],
+  };
+
+  const schedule = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-06-11',
+    leaseEndDate: '2026-06-11',
+    moveInDate: '2026-06-11',
+    rules,
+    billingPeriodMode: 'custom_days',
+    customDays: 30,
+    waterEstimatePerMonth: 30,
+    electricityEstimatePerMonth: 60,
+    dueDateRule: { offsetDays: 0 },
+  });
+
+  console.log(sdk.getPaymentScheduleText(schedule));
+  const only = schedule.items.find(i => i.kind !== 'deposit');
+  console.log(`\n验证: 共1期,期数=${schedule.items.filter(i=>i.kind!=='deposit').length},租金≈3000/30=100,实际=${only?.rent}`);
+  console.log(`验证: 物业费≈150/30=5,实际=${only?.serviceFees[0]?.amount}`);
+  console.log(`验证: 水费≈1,电费≈2,合计水电≈${only?.utilityEstimate}`);
+}
+
+function testReconciliationStatus(): void {
+  log('测试18: 对账状态 — 待收/部分收款/已收/逾期自动识别');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    deposit: { amount: 6000 },
+    services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+  };
+
+  const schedule = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-03-31',
+    moveInDate: '2026-01-01',
+    rules,
+    billingPeriodMode: 'natural_month',
+    dueDateRule: { offsetDays: 5 },
+    utilityEstimatePerMonth: 100,
+  });
+
+  const rec = sdk.applyPayments(schedule, [
+    { id: 'PAY-1', date: '2026-01-02', amount: 6000, method: 'wechat', remark: '押金全额', allocations: [{ periodIndex: 0, feeTypes: ['deposit'], amount: 6000 }] },
+    { id: 'PAY-2', date: '2026-01-05', amount: 2000, method: 'alipay', remark: '1月部分租金', allocations: [{ periodIndex: 1, feeTypes: ['rent'], amount: 2000 }] },
+    { id: 'PAY-3', date: '2026-02-03', amount: 3300, method: 'bank', remark: '2月全额', allocations: [{ periodIndex: 2, feeTypes: ['rent', 'service', 'water'], amount: 3300 }] },
+  ], { asOfDate: '2026-03-15' });
+
+  console.log(sdk.getReconciliationText(rec));
+  console.log('\n验证:');
+  rec.scheduleItems.forEach(i => {
+    console.log(`  第${i.periodIndex}期[${i.kind}] 应收=${i.totalExpected},已收=${i.receivedAmount},剩余=${i.remainingAmount},状态=${i.status},进度=${i.progress}%,逾期=${i.overdueDays}天`);
+  });
+}
+
+function testCombinedAndSplitPayments(): void {
+  log('测试19: 合并收款+分次收款 — 押金+首期一起收，租金分两笔');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    deposit: { amount: 6000 },
+    services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+  };
+
+  const schedule = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-03-15',
+    leaseEndDate: '2026-05-31',
+    moveInDate: '2026-03-15',
+    rules,
+    billingPeriodMode: 'natural_month',
+    dueDateRule: { offsetDays: 5 },
+    utilityEstimatePerMonth: 120,
+  });
+
+  const depositAndFirst = schedule.items[1].totalExpected + schedule.items[0].totalExpected;
+  const rec = sdk.applyPayments(schedule, [
+    { id: 'PAY-A', date: '2026-03-14', amount: depositAndFirst, method: 'wechat', remark: '押金+首期合并收款', allocations: [
+      { periodIndex: 0, feeTypes: ['deposit'], amount: 6000 },
+      { periodIndex: 1, feeTypes: ['rent', 'service', 'water', 'electricity'], amount: schedule.items[1].totalExpected },
+    ]},
+    { id: 'PAY-B1', date: '2026-04-20', amount: 2000, method: 'alipay', remark: '2月租金分笔1', allocations: [
+      { periodIndex: 2, feeTypes: ['rent'], amount: 2000 },
+    ]},
+    { id: 'PAY-B2', date: '2026-04-25', amount: 1320, method: 'alipay', remark: '2月剩余补齐', allocations: [
+      { periodIndex: 2, feeTypes: ['rent', 'service'], amount: 1320 },
+    ]},
+  ], { asOfDate: '2026-05-05' });
+
+  console.log(sdk.getReconciliationText(rec));
+}
+
+function testDueDateRuleCombined(): void {
+  log('测试20: 付款规则组合 — 固定几号+提前几天+首期入住晚顺延');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+  };
+
+  const schedule = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-01-20',
+    leaseEndDate: '2026-03-31',
+    moveInDate: '2026-01-20',
+    rules,
+    billingPeriodMode: 'natural_month',
+    dueDateRule: { offsetDays: 5, fixedDayOfMonth: 15, shiftHoliday: false },
+    utilityEstimatePerMonth: 90,
+  });
+
+  console.log(sdk.getPaymentScheduleText(schedule));
+  console.log('\n验证:');
+  schedule.items.forEach(i => {
+    if (i.kind !== 'deposit') console.log(`  第${i.periodIndex}期[${i.kind}] 账期=${i.period.startDate}~${i.period.endDate},应收日=${i.dueDate}`);
+  });
+  console.log(`首期入住1月20日早，应收日应顺延到≥1月20日`);
+}
+
+function testDiscountScopeFromFeeRules(): void {
+  log('测试21: 优惠从 FeeRules 读取 + 三种作用域（首期/全部/仅服务费）');
+
+  const rulesA: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+    discounts: [{ type: 'fixed', amount: 200, applyTo: ['rent', 'service'], description: '首期减免200' }],
+  };
+  const schA = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-01-01', leaseEndDate: '2026-03-31', moveInDate: '2026-01-01',
+    rules: rulesA, billingPeriodMode: 'natural_month', discountScope: 'first_period',
+    dueDateRule: { offsetDays: 0 },
+  });
+  console.log('-- discountScope=first_period 首期减免200 --');
+  schA.items.filter(i => i.kind !== 'deposit').forEach(i => {
+    console.log(`  第${i.periodIndex}期 优惠=${i.discountTotal},本期合计=${i.totalExpected}`);
+  });
+
+  const schB = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-01-01', leaseEndDate: '2026-03-31', moveInDate: '2026-01-01',
+    rules: rulesA, billingPeriodMode: 'natural_month', discountScope: 'all_periods',
+    dueDateRule: { offsetDays: 0 },
+  });
+  console.log('-- discountScope=all_periods 每期都减200 --');
+  schB.items.filter(i => i.kind !== 'deposit').forEach(i => {
+    console.log(`  第${i.periodIndex}期 优惠=${i.discountTotal},本期合计=${i.totalExpected}`);
+  });
+
+  const rulesC: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+    discounts: [{ type: 'percentage', amount: 50, applyTo: ['service'], description: '服务费5折' }],
+  };
+  const schC = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-01-01', leaseEndDate: '2026-03-31', moveInDate: '2026-01-01',
+    rules: rulesC, billingPeriodMode: 'natural_month', discountScope: 'service_only',
+    dueDateRule: { offsetDays: 0 },
+  });
+  console.log('-- discountScope=service_only 仅服务费5折，每期服务费从200→100 --');
+  schC.items.filter(i => i.kind !== 'deposit').forEach(i => {
+    console.log(`  第${i.periodIndex}期 物业费=${i.serviceFees[0]?.amount},优惠=${i.discountTotal},本期合计=${i.totalExpected}`);
+  });
 }
 
 function testCustomDaysRentNotNatural(): void {
@@ -470,6 +641,7 @@ function testPaymentScheduleWithDiscounts(): void {
     rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
     deposit: { amount: 6000 },
     services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+    discounts: [{ type: 'fixed', amount: 150, applyTo: ['rent'], description: '首月优惠' }],
   };
 
   const schedule = sdk.generatePaymentSchedule({
@@ -481,7 +653,7 @@ function testPaymentScheduleWithDiscounts(): void {
     dueDateRule: { offsetDays: 5 },
     waterEstimatePerMonth: 40,
     electricityEstimatePerMonth: 80,
-    discounts: [{ type: 'fixed', amount: 150, applyTo: ['rent'], description: '首月优惠' }],
+    discountScope: 'first_period',
   });
 
   console.log(sdk.getPaymentScheduleText(schedule));
