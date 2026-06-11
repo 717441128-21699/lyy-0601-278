@@ -7,3 +7,4 @@ export * from './discount';
 export * from './split';
 export * from './comparison';
 export * from './billGenerator';
+export * from './paymentSchedule';

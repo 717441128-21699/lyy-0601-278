@@ -15,6 +15,8 @@ export type FeeType =
 
 export type BillingCycle = 'monthly' | 'weekly' | 'daily' | 'quarterly';
 
+export type BillingPeriodMode = 'natural_month' | 'natural_quarter' | 'custom_days';
+
 export interface DateRange {
   startDate: string;
   endDate: string;
@@ -118,6 +120,7 @@ export interface CalculationInput {
   moveInDate: string;
   moveOutDate?: string;
   billingPeriod: DateRange;
+  billingPeriodMode?: BillingPeriodMode;
   numberOfTenants: number;
   tenants?: Tenant[];
   meterReadings?: MeterReadings;
@@ -156,6 +159,7 @@ export interface BillSummary {
   numberOfItems: number;
   primaryTenant?: string;
   status: 'pending' | 'paid' | 'overdue' | 'refunded';
+  billingPeriodMode?: BillingPeriodMode;
 }
 
 export interface Bill {
@@ -190,7 +194,10 @@ export interface BillComparison {
     currentAmount: number;
     previousAmount: number;
     difference: number;
+    reason: string;
+    isAnomaly: boolean;
   }[];
+  anomalies: string[];
   summary: string;
 }
 

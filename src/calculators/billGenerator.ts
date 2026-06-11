@@ -87,6 +87,7 @@ export function generateBill(
     const serviceFees = calculateServiceFees({
       services: input.rules.services,
       billingPeriod: input.billingPeriod,
+      billingPeriodMode: input.billingPeriodMode,
       roundingMode,
       precision,
     });
@@ -161,6 +162,7 @@ export function generateBill(
     numberOfItems: feeDetails.length,
     primaryTenant: input.tenants?.[0]?.name,
     status: validation.valid ? 'pending' : 'pending',
+    billingPeriodMode: input.billingPeriodMode,
   };
 
   if (splitExplanations.length === 0) {

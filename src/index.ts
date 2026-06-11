@@ -23,6 +23,7 @@ import { calculateUtility, UtilityCalculationInput } from './calculators/utility
 import { calculateServiceFees, ServiceFeeCalculationInput } from './calculators/service';
 import { calculatePenalty, PenaltyCalculationInput, calculateLateFee, LateFeeCalculationInput } from './calculators/penalty';
 import { calculateDiscounts, DiscountCalculationInput } from './calculators/discount';
+import { generatePaymentSchedule, PaymentScheduleInput, PaymentScheduleResult } from './calculators/paymentSchedule';
 
 export class RentalFeeSDK {
   private defaultRoundingMode: RoundingMode;
@@ -126,6 +127,10 @@ export class RentalFeeSDK {
     lines.push(`账期: ${bill.summary.period.startDate} 至 ${bill.summary.period.endDate}`);
     lines.push(`总金额: ${bill.summary.totalAmount} 元`);
     lines.push(`费用项数: ${bill.summary.numberOfItems}`);
+    if (bill.summary.billingPeriodMode) {
+      const modeLabels: Record<string, string> = { natural_month: '自然月', natural_quarter: '自然季度', custom_days: '自定义天数' };
+      lines.push(`账期口径: ${modeLabels[bill.summary.billingPeriodMode] || bill.summary.billingPeriodMode}`);
+    }
     if (bill.summary.dueDate) {
       lines.push(`付款截止日: ${bill.summary.dueDate}`);
     }
@@ -192,6 +197,70 @@ export class RentalFeeSDK {
       return '无异常提示';
     }
     return '异常提示:\n' + bill.exceptions.map((e) => `  - ${e}`).join('\n');
+  }
+
+  generatePaymentSchedule(input: Omit<PaymentScheduleInput, 'roundingMode' | 'precision'>): PaymentScheduleResult {
+    return generatePaymentSchedule({
+      ...input,
+      roundingMode: this.defaultRoundingMode,
+      precision: this.defaultPrecision,
+    });
+  }
+
+  getPaymentScheduleText(schedule: PaymentScheduleResult): string {
+    const lines: string[] = [];
+    if (schedule.depositItem) {
+      lines.push(`【押金】${schedule.depositItem.amount}元，${schedule.depositItem.dueDate}前支付`);
+      lines.push(`  ${schedule.depositItem.note}`);
+      lines.push('');
+    }
+    lines.push('收款计划:');
+    for (const item of schedule.items) {
+      lines.push(`  第${item.periodIndex}期: ${item.period.startDate} ~ ${item.period.endDate}`);
+      lines.push(`    应付日期: ${item.dueDate}`);
+      lines.push(`    租金: ${item.rent}元`);
+      item.serviceFees.forEach(sf => {
+        lines.push(`    ${sf.type}: ${sf.amount}元`);
+      });
+      if (item.utilityEstimate > 0) {
+        lines.push(`    水电预估: ${item.utilityEstimate}元`);
+      }
+      lines.push(`    本期合计: ${item.totalExpected}元`);
+      lines.push(`    备注: ${item.note}`);
+    }
+    lines.push('');
+    lines.push(`汇总: 租金${schedule.totalRent}元 + 服务费${schedule.totalServiceFees}元 + 水电预估${schedule.totalUtilityEstimate}元 = ${schedule.totalAll}元`);
+    return lines.join('\n');
+  }
+
+  compareBillsDetailed(input: BillComparisonInput): BillComparison {
+    return compareBills({
+      ...input,
+      roundingMode: input.roundingMode || this.defaultRoundingMode,
+      precision: input.precision ?? this.defaultPrecision,
+    });
+  }
+
+  getComparisonText(comparison: BillComparison): string {
+    const lines: string[] = [];
+    lines.push(`本期: ${comparison.currentBillId}`);
+    lines.push(`上期: ${comparison.previousBillId}`);
+    lines.push(`差额: ${comparison.difference > 0 ? '+' : ''}${comparison.difference}元（${comparison.percentageChange}%）`);
+    lines.push('');
+    lines.push('费用项对比:');
+    for (const item of comparison.itemDifferences) {
+      const flag = item.isAnomaly ? '⚠' : ' ';
+      lines.push(`  ${flag} ${item.name}: 上期${item.previousAmount}元 → 本期${item.currentAmount}元（${item.difference > 0 ? '+' : ''}${item.difference}元）`);
+      lines.push(`    原因: ${item.reason}`);
+    }
+    if (comparison.anomalies.length > 0) {
+      lines.push('');
+      lines.push('异常提示:');
+      comparison.anomalies.forEach(a => lines.push(`  ⚠ ${a}`));
+    }
+    lines.push('');
+    lines.push(`总结: ${comparison.summary}`);
+    return lines.join('\n');
   }
 
   private applyDefaults(input: CalculationInput): CalculationInput {

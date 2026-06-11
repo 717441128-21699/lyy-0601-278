@@ -84,6 +84,85 @@ export function isLeapYear(year: number): boolean {
   return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
 }
 
+export function isNaturalMonth(startDate: string, endDate: string): boolean {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+  if (start.getDate() !== 1) return false;
+  const lastDay = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
+  return end.getDate() === lastDay &&
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth();
+}
+
+export function isNaturalQuarter(startDate: string, endDate: string): boolean {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+  if (start.getDate() !== 1) return false;
+  const startMonth = start.getMonth();
+  const quarterStartMonths = [0, 3, 6, 9];
+  if (!quarterStartMonths.includes(startMonth)) return false;
+  const expectedEndMonth = startMonth + 2;
+  const lastDay = new Date(end.getFullYear(), expectedEndMonth + 1, 0).getDate();
+  return end.getDate() === lastDay &&
+    start.getFullYear() === end.getFullYear() &&
+    end.getMonth() === expectedEndMonth;
+}
+
+export function countNaturalMonthsInRange(startDate: string, endDate: string): number {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+  if (start > end) return 0;
+  return (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
+}
+
+export function splitIntoNaturalMonths(startDate: string, endDate: string): { startDate: string; endDate: string }[] {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+  const periods: { startDate: string; endDate: string }[] = [];
+  let current = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (current <= end) {
+    const lastDay = new Date(current.getFullYear(), current.getMonth() + 1, 0);
+    const periodStart = current < start ? start : current;
+    const periodEnd = lastDay > end ? end : lastDay;
+    if (periodStart <= periodEnd) {
+      periods.push({ startDate: formatDate(periodStart), endDate: formatDate(periodEnd) });
+    }
+    current = new Date(current.getFullYear(), current.getMonth() + 1, 1);
+  }
+  return periods;
+}
+
+export function splitIntoNaturalQuarters(startDate: string, endDate: string): { startDate: string; endDate: string }[] {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+  const periods: { startDate: string; endDate: string }[] = [];
+  const quarterStartMonths = [0, 3, 6, 9];
+  let qStartMonth = quarterStartMonths.find(m => m <= start.getMonth()) ?? 0;
+  let current = new Date(start.getFullYear(), qStartMonth, 1);
+  if (current > start) {
+    const prevQMonth = quarterStartMonths.filter(m => m <= start.getMonth());
+    qStartMonth = prevQMonth.length > 0 ? prevQMonth[prevQMonth.length - 1] : 0;
+    current = new Date(start.getFullYear(), qStartMonth, 1);
+  }
+  while (current <= end) {
+    const qEndMonth = current.getMonth() + 2;
+    const lastDay = new Date(current.getFullYear(), qEndMonth + 1, 0);
+    const periodStart = current < start ? start : current;
+    const periodEnd = lastDay > end ? end : lastDay;
+    if (periodStart <= periodEnd) {
+      periods.push({ startDate: formatDate(periodStart), endDate: formatDate(periodEnd) });
+    }
+    current = new Date(current.getFullYear(), current.getMonth() + 3, 1);
+  }
+  return periods;
+}
+
+export function addMonths(dateStr: string, months: number): string {
+  const date = parseDate(dateStr);
+  date.setMonth(date.getMonth() + months);
+  return formatDate(date);
+}
+
 export function getOverlapRange(
   range1: { startDate: string; endDate: string },
   range2: { startDate: string; endDate: string }
