@@ -152,7 +152,7 @@ function testPaymentScheduleNaturalMonth(): void {
     rules,
     billingPeriodMode: 'natural_month',
     utilityEstimatePerMonth: 150,
-    paymentDueOffsetDays: 5,
+    dueDateRule: { offsetDays: 5 },
   });
 
   console.log(sdk.getPaymentScheduleText(schedule));
@@ -177,7 +177,7 @@ function testPaymentScheduleMidMoveIn(): void {
     rules,
     billingPeriodMode: 'natural_month',
     utilityEstimatePerMonth: 100,
-    paymentDueOffsetDays: 5,
+    dueDateRule: { offsetDays: 5 },
   });
 
   console.log(sdk.getPaymentScheduleText(schedule));
@@ -203,7 +203,7 @@ function testPaymentScheduleEarlyMoveOut(): void {
     rules,
     billingPeriodMode: 'natural_month',
     utilityEstimatePerMonth: 100,
-    paymentDueOffsetDays: 5,
+    dueDateRule: { offsetDays: 5 },
   });
 
   console.log(sdk.getPaymentScheduleText(schedule));
@@ -355,7 +355,7 @@ function testServiceFeeFullQ1PlusExtra(): void {
 function runAllTests(): void {
   console.log('\n' + '█'.repeat(60));
   console.log('█'.padEnd(58) + '█');
-  console.log('█' + '租房费用 SDK — 四项增强验证测试'.padStart(38).padEnd(58) + '█');
+  console.log('█' + '租房费用 SDK — 账期口径×收款计划 完整验证'.padStart(44).padEnd(58) + '█');
   console.log('█'.padEnd(58) + '█');
   console.log('█'.repeat(60));
 
@@ -371,11 +371,140 @@ function runAllTests(): void {
   testServiceFeeNonFullNaturalQuarter();
   testServiceFeeFullQ1PlusExtra();
 
+  testCustomDaysRentNotNatural();
+  testQuarterPeriodMonthlyService();
+  testPaymentScheduleFixedDayDue();
+  testPaymentScheduleWithDiscounts();
+  testHolidayShiftDueDate();
+
   console.log('\n' + '█'.repeat(60));
   console.log('█'.padEnd(58) + '█');
   console.log('█' + '所有验证测试执行完成！'.padStart(35).padEnd(58) + '█');
   console.log('█'.padEnd(58) + '█');
   console.log('█'.repeat(60) + '\n');
+}
+
+function testCustomDaysRentNotNatural(): void {
+  log('测试12: 租金 — 自定义天数30天不要被识别自然整月');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+  };
+
+  const inputCustom: CalculationInput = {
+    leaseStartDate: '2026-01-15',
+    leaseEndDate: '2026-12-31',
+    moveInDate: '2026-01-15',
+    billingPeriod: { startDate: '2026-01-15', endDate: '2026-02-13' },
+    billingPeriodMode: 'custom_days',
+    numberOfTenants: 1,
+    rules,
+  };
+  const billCustom = sdk.generateBill(inputCustom);
+  const rentCustom = billCustom.feeDetails.find(f => f.type === 'rent');
+  console.log(sdk.getFeeBreakdown(billCustom));
+  console.log(`\n验证: 30天自定义天数=1整月(按30天),金额=3000`);
+  console.log(`  实际租金 = ${rentCustom?.amount}, 说明: ${rentCustom?.description}`);
+
+  const inputNM: CalculationInput = { ...inputCustom, billingPeriodMode: 'natural_month' };
+  const billNM = sdk.generateBill(inputNM);
+  const rentNM = billNM.feeDetails.find(f => f.type === 'rent');
+  console.log(`\n对比: 自然月口径下1月15-2月13日 = 1月17天+2月13天 ≈ 3000/31*17 + 3000/28*13 = ${(3000/31*17 + 3000/28*13).toFixed(2)}`);
+  console.log(`  实际租金 = ${rentNM?.amount}, 说明: ${rentNM?.description}`);
+}
+
+function testQuarterPeriodMonthlyService(): void {
+  log('测试13: 自然季度收款计划内的按月服务费 — 4-6月完整季度直接累计3个月');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    services: [
+      { type: '物业费', amount: 200, cycle: 'monthly' },
+    ],
+  };
+
+  const schedule = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-04-01',
+    leaseEndDate: '2026-09-30',
+    moveInDate: '2026-04-01',
+    rules,
+    billingPeriodMode: 'natural_quarter',
+    waterEstimatePerMonth: 50,
+    electricityEstimatePerMonth: 100,
+  });
+
+  console.log(sdk.getPaymentScheduleText(schedule));
+  const q2 = schedule.items.find(i => i.kind !== 'deposit' && i.period.startDate === '2026-04-01');
+  console.log(`\n验证: Q2(4-6月)物业费 = 200×3 = 600, 实际=${q2?.serviceFees[0]?.amount}`);
+  console.log(`验证: Q2(91天)月租金按3个整月=3000×3=9000, 实际=${q2?.rent}`);
+}
+
+function testPaymentScheduleFixedDayDue(): void {
+  log('测试14: 收款计划 — 每月固定5号收款+提前3天收+中途入住修正');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    deposit: { amount: 9000 },
+    services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+  };
+
+  const schedule = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-01-15',
+    leaseEndDate: '2026-06-30',
+    moveInDate: '2026-01-15',
+    rules,
+    billingPeriodMode: 'natural_month',
+    dueDateRule: { offsetDays: 3, fixedDayOfMonth: 5, shiftHoliday: false },
+    utilityEstimatePerMonth: 120,
+  });
+
+  console.log(sdk.getPaymentScheduleText(schedule));
+  console.log(`\n验证: 首期(1月15-31日)应收日不早于入住日1月15日`);
+  console.log(`验证: 2月期应收日=1月5日(固定日)？因offsetDays=3默认正数表示上期收`);
+}
+
+function testPaymentScheduleWithDiscounts(): void {
+  log('测试15: 收款计划 — 含优惠抵扣的完整日历数据');
+
+  const rules: FeeRules = {
+    rent: { monthlyAmount: 3000, billingCycle: 'monthly', prorationMethod: 'by_day' },
+    deposit: { amount: 6000 },
+    services: [{ type: '物业费', amount: 200, cycle: 'monthly' }],
+  };
+
+  const schedule = sdk.generatePaymentSchedule({
+    leaseStartDate: '2026-01-01',
+    leaseEndDate: '2026-03-31',
+    moveInDate: '2026-01-01',
+    rules,
+    billingPeriodMode: 'natural_month',
+    dueDateRule: { offsetDays: 5 },
+    waterEstimatePerMonth: 40,
+    electricityEstimatePerMonth: 80,
+    discounts: [{ type: 'fixed', amount: 150, applyTo: ['rent'], description: '首月优惠' }],
+  });
+
+  console.log(sdk.getPaymentScheduleText(schedule));
+  console.log(`\n验证: 押金期独立，首期(1月)含优惠抵扣，水电拆水费预估+电费预估`);
+}
+
+function testHolidayShiftDueDate(): void {
+  log('测试16: 节假日顺延 — 应收日遇周末顺延至周一');
+
+  const r1 = sdk.computeDueDate('2026-06-01', { offsetDays: 0, shiftHoliday: true }, '2026-06-01', 'regular');
+  console.log(`6月1日: 计算应收日 = ${r1} (6/1是周一,不延后)`);
+
+  const r2 = sdk.computeDueDate('2026-06-06', { offsetDays: 0, shiftHoliday: true }, '2026-06-06', 'regular');
+  console.log(`6月6日: 计算应收日 = ${r2} (6/6是周六,应顺延至6/8周一)`);
+
+  const r3 = sdk.computeDueDate('2026-06-07', { offsetDays: 0, shiftHoliday: true }, '2026-06-07', 'regular');
+  console.log(`6月7日: 计算应收日 = ${r3} (6/7是周日,应顺延至6/8周一)`);
+
+  const r4 = sdk.computeDueDate('2026-06-08', { fixedDayOfMonth: 5, shiftHoliday: true }, '2026-06-01', 'regular');
+  console.log(`账期6月8日起,固定5号收 = ${r4} (6月5日周五,不延后)`);
+
+  const r5 = sdk.computeDueDate('2026-03-01', { fixedDayOfMonth: 1, shiftHoliday: true }, '2026-03-01', 'regular');
+  console.log(`账期3月1日起,固定1号收 = ${r5} (3月1日是周日,应顺延至3/2周一)`);
 }
 
 runAllTests();

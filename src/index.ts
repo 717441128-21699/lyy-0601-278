@@ -23,7 +23,7 @@ import { calculateUtility, UtilityCalculationInput } from './calculators/utility
 import { calculateServiceFees, ServiceFeeCalculationInput } from './calculators/service';
 import { calculatePenalty, PenaltyCalculationInput, calculateLateFee, LateFeeCalculationInput } from './calculators/penalty';
 import { calculateDiscounts, DiscountCalculationInput } from './calculators/discount';
-import { generatePaymentSchedule, PaymentScheduleInput, PaymentScheduleResult } from './calculators/paymentSchedule';
+import { generatePaymentSchedule, PaymentScheduleInput, PaymentScheduleResult, PaymentPeriodKind, DueDateRule, computeDueDate } from './calculators/paymentSchedule';
 
 export class RentalFeeSDK {
   private defaultRoundingMode: RoundingMode;
@@ -209,28 +209,51 @@ export class RentalFeeSDK {
 
   getPaymentScheduleText(schedule: PaymentScheduleResult): string {
     const lines: string[] = [];
-    if (schedule.depositItem) {
-      lines.push(`【押金】${schedule.depositItem.amount}元，${schedule.depositItem.dueDate}前支付`);
-      lines.push(`  ${schedule.depositItem.note}`);
+    const kindLabels: Record<string, string> = {
+      regular: '常规期',
+      move_in: '首期',
+      move_out: '末期',
+      deposit: '押金期',
+    };
+    for (const item of schedule.items) {
+      const k = kindLabels[item.kind] || item.kind;
+      if (item.kind === 'deposit') {
+        lines.push(`【${k}】第${item.periodIndex > 0 ? item.periodIndex : ''}期: ${item.dueDate}前支付`);
+        lines.push(`  押金: ${item.deposit}元`);
+        lines.push(`  备注: ${item.note}`);
+      } else {
+        lines.push(`第${item.periodIndex}期【${k}】: ${item.period.startDate} ~ ${item.period.endDate}`);
+        lines.push(`  应付日期: ${item.dueDate}`);
+        lines.push(`  租金: ${item.rent}元`);
+        item.serviceFees.forEach(sf => {
+          lines.push(`  ${sf.type}: ${sf.amount}元`);
+        });
+        if (item.waterEstimate > 0) lines.push(`  水费预估: ${item.waterEstimate}元`);
+        if (item.electricityEstimate > 0) lines.push(`  电费预估: ${item.electricityEstimate}元`);
+        if (item.utilityEstimate > 0 && item.waterEstimate === 0 && item.electricityEstimate === 0) {
+          lines.push(`  水电预估: ${item.utilityEstimate}元`);
+        }
+        item.discounts.forEach(d => {
+          lines.push(`  优惠(${d.type}): ${d.amount}元`);
+        });
+        lines.push(`  本期合计: ${item.totalExpected}元`);
+        lines.push(`  备注: ${item.note}`);
+      }
       lines.push('');
     }
-    lines.push('收款计划:');
-    for (const item of schedule.items) {
-      lines.push(`  第${item.periodIndex}期: ${item.period.startDate} ~ ${item.period.endDate}`);
-      lines.push(`    应付日期: ${item.dueDate}`);
-      lines.push(`    租金: ${item.rent}元`);
-      item.serviceFees.forEach(sf => {
-        lines.push(`    ${sf.type}: ${sf.amount}元`);
-      });
-      if (item.utilityEstimate > 0) {
-        lines.push(`    水电预估: ${item.utilityEstimate}元`);
-      }
-      lines.push(`    本期合计: ${item.totalExpected}元`);
-      lines.push(`    备注: ${item.note}`);
-    }
-    lines.push('');
-    lines.push(`汇总: 租金${schedule.totalRent}元 + 服务费${schedule.totalServiceFees}元 + 水电预估${schedule.totalUtilityEstimate}元 = ${schedule.totalAll}元`);
+    lines.push('汇总:');
+    if (schedule.totalRent) lines.push(`  租金: ${schedule.totalRent}元`);
+    if (schedule.totalServiceFees) lines.push(`  服务费: ${schedule.totalServiceFees}元`);
+    if (schedule.totalWaterEstimate) lines.push(`  水费预估: ${schedule.totalWaterEstimate}元`);
+    if (schedule.totalElectricityEstimate) lines.push(`  电费预估: ${schedule.totalElectricityEstimate}元`);
+    if (schedule.totalDeposit) lines.push(`  押金: ${schedule.totalDeposit}元`);
+    if (schedule.totalDiscounts) lines.push(`  优惠合计: ${schedule.totalDiscounts}元`);
+    lines.push(`  全部合计: ${schedule.totalAll}元`);
     return lines.join('\n');
+  }
+
+  computeDueDate(periodStart: string, dueDateRule: DueDateRule, moveInDate: string, kind: 'regular' | 'move_in' | 'deposit' = 'regular'): string {
+    return computeDueDate(periodStart, dueDateRule, moveInDate, kind);
   }
 
   compareBillsDetailed(input: BillComparisonInput): BillComparison {

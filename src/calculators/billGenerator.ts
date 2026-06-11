@@ -38,6 +38,7 @@ export function generateBill(
       moveOutDate: input.moveOutDate,
       leaseStartDate: input.leaseStartDate,
       leaseEndDate: input.leaseEndDate,
+      billingPeriodMode: input.billingPeriodMode,
       roundingMode,
       precision,
     });

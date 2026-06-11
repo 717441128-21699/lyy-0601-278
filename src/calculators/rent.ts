@@ -1,4 +1,4 @@
-import { RentRule, DateRange, FeeDetail, RoundingMode } from '../types';
+import { RentRule, DateRange, FeeDetail, RoundingMode, BillingPeriodMode } from '../types';
 import {
   daysBetween,
   parseDate,
@@ -13,6 +13,7 @@ export interface RentCalculationInput {
   moveOutDate?: string;
   leaseStartDate: string;
   leaseEndDate: string;
+  billingPeriodMode?: BillingPeriodMode;
   roundingMode?: RoundingMode;
   precision?: number;
 }
@@ -25,6 +26,7 @@ export function calculateRent(input: RentCalculationInput): FeeDetail {
     moveOutDate,
     leaseStartDate,
     leaseEndDate,
+    billingPeriodMode,
     roundingMode = 'round',
     precision = 2,
   } = input;
@@ -55,6 +57,48 @@ export function calculateRent(input: RentCalculationInput): FeeDetail {
   }
 
   const effectivePeriod = { startDate: effectiveStart, endDate: effectiveEnd };
+  const mode = billingPeriodMode || 'natural_month';
+  const totalDays = daysBetween(effectiveStart, effectiveEnd) + 1;
+  const daysPerMonth = 30;
+
+  if (mode === 'custom_days' && rentRule.billingCycle === 'monthly') {
+    const fullMonths = Math.floor(totalDays / daysPerMonth);
+    const remainingDays = totalDays % daysPerMonth;
+    const dailyRate = rentRule.monthlyAmount / daysPerMonth;
+    const fullAmount = fullMonths * rentRule.monthlyAmount;
+    const partialAmount = remainingDays * dailyRate;
+    const amount = fullAmount + partialAmount;
+
+    breakdown.push({ label: '账期口径', value: 3 });
+    breakdown.push({ label: '账期天数', value: totalDays });
+    if (fullMonths > 0) {
+      breakdown.push({ label: '整月数(按30天计)', value: fullMonths });
+      breakdown.push({ label: '月租金', value: rentRule.monthlyAmount });
+    }
+    if (remainingDays > 0) {
+      breakdown.push({ label: '零散天数', value: remainingDays });
+      breakdown.push({ label: '日租金(按30天折算)', value: roundAmount(dailyRate, roundingMode, precision) });
+      breakdown.push({ label: '零散天数租金', value: roundAmount(partialAmount, roundingMode, precision) });
+    }
+    breakdown.push({ label: '小计', value: roundAmount(amount, roundingMode, precision) });
+
+    let description = '';
+    if (fullMonths > 0 && remainingDays > 0) {
+      description = `月租金(自定义天数口径，${fullMonths}整月+${remainingDays}天)`;
+    } else if (fullMonths > 0) {
+      description = `月租金(自定义天数口径，${fullMonths}整月)`;
+    } else {
+      description = `月租金(自定义天数口径，${remainingDays}天)`;
+    }
+
+    return {
+      type: 'rent',
+      name: '租金',
+      amount: roundAmount(amount, roundingMode, precision),
+      description,
+      breakdown,
+    };
+  }
 
   if (rentRule.billingCycle === 'daily') {
     const days = daysBetween(effectiveStart, effectiveEnd) + 1;
